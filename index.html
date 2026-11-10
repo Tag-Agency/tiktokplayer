@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TikTok Player locale</title>
+<style>
+  :root { --bg:#0f0f12; --card:#1a1a20; --fg:#f2f2f5; --muted:#9a9aa6; --acc:#fe2c55; --acc2:#25f4ee; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,system-ui,sans-serif; background:var(--bg); color:var(--fg); min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:32px 16px; }
+  h1 { font-size:22px; margin:0 0 20px; letter-spacing:-.3px; }
+  h1 span { color:var(--acc); }
+  form { display:flex; gap:8px; width:100%; max-width:560px; }
+  input { flex:1; padding:14px 16px; border-radius:12px; border:1px solid #2c2c35; background:var(--card); color:var(--fg); font-size:15px; outline:none; }
+  input:focus { border-color:var(--acc2); }
+  button { padding:0 20px; border:0; border-radius:12px; background:var(--acc); color:#fff; font-weight:600; font-size:15px; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:wait; }
+  #msg { color:var(--muted); font-size:14px; min-height:20px; margin:14px 0; text-align:center; }
+  #msg.err { color:#ff6b81; }
+  #player { width:100%; max-width:380px; display:none; }
+  .frame { position:relative; width:100%; aspect-ratio:9/16; border-radius:16px; overflow:hidden; background:#000; }
+  .frame iframe { position:absolute; inset:0; width:100%; height:100%; border:0; }
+  .meta { margin-top:12px; font-size:14px; line-height:1.4; }
+  .meta a { color:var(--acc2); text-decoration:none; }
+  .meta .t { color:var(--muted); margin-top:4px; }
+  .switch { display:flex; gap:6px; margin-top:12px; flex-wrap:wrap; }
+  .switch button { padding:8px 12px; font-size:13px; background:var(--card); border:1px solid #2c2c35; }
+  .switch button.on { border-color:var(--acc2); }
+  .frame.v2 { aspect-ratio:auto; height:740px; background:#fff; }
+</style>
+</head>
+<body>
+  <h1>TikTok <span>Player</span> locale</h1>
+  <form id="f">
+    <input id="url" placeholder="Incolla il link TikTok (es. https://vm.tiktok.com/…)" autocomplete="off" autofocus>
+    <button id="go">Apri</button>
+  </form>
+  <div id="msg"></div>
+  <div id="player">
+    <div id="bq"></div>
+    <div class="frame"><iframe id="ifr" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen></iframe></div>
+    <div class="meta" id="meta"></div>
+    <div class="switch">
+      <button type="button" data-p="v2">Player classico</button>
+      <button type="button" data-p="v1">Player nuovo</button>
+      <button type="button" data-p="bq">Embed ufficiale</button>
+      <button type="button" id="ext">Apri su TikTok</button>
+    </div>
+    <div class="meta"><div class="t" id="info"></div></div>
+  </div>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function extractId(u) {
+  const m = u.match(/\/(?:video|photo|v)\/(\d{8,})/) || u.match(/[?&](?:item_id|share_item_id)=(\d{8,})/);
+  return m ? m[1] : null;
+}
+async function resolveLink(input) {
+  let url = input.trim();
+  if (/^\d{8,}$/.test(url)) return { id: url, finalUrl: null };
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+  let host;
+  try { host = new URL(url).hostname; } catch { throw new Error('Link non valido'); }
+  if (!/(^|\.)tiktok\.com$/i.test(host)) throw new Error('Il link non è di TikTok');
+  const direct = extractId(url);
+  // oEmbed ufficiale: dà autore/titolo e, per i link brevi, l'ID del video
+  let meta = {};
+  try {
+    const r = await fetch('https://www.tiktok.com/oembed?url=' + encodeURIComponent(url));
+    if (r.ok) {
+      const o = await r.json();
+      const fromHtml = (o.html || '').match(/data-video-id="(\d+)"/);
+      const fromCite = (o.html || '').match(/cite="([^"]+)"/);
+      meta = { title: o.title, author: o.author_name, authorUrl: o.author_url,
+               id: o.embed_product_id || (fromHtml && fromHtml[1]), cite: fromCite && fromCite[1] };
+    }
+  } catch {}
+  const id = direct || meta.id;
+  if (!id) throw new Error('Non riesco a risolvere questo link breve dal browser. Aprilo, copia l\'indirizzo completo (tiktok.com/@utente/video/…) e incollalo qui.');
+  return { id, finalUrl: direct ? url : (meta.cite || null), ...meta, id };
+}
+async function open(link) {
+  if (!link) return;
+  $('go').disabled = true; $('msg').className = ''; $('msg').textContent = 'Risolvo il link…';
+  try {
+    const j = await resolveLink(link);
+    current = j; setPlayer(localStorage.getItem('player') || 'v2');
+    $('info').innerHTML = 'ID video: ' + esc(j.id) + (j.finalUrl ? '  ·  ' + esc(j.finalUrl) : '');
+    $('meta').innerHTML = j.author
+      ? `<a href="${esc(j.authorUrl)}" target="_blank">@${esc(j.author)}</a><div class="t">${esc(j.title)}</div>`
+      : `Video ${esc(j.id)}`;
+    $('player').style.display = 'block'; $('msg').textContent = '';
+    history.replaceState(null, '', '?url=' + encodeURIComponent(link));
+  } catch (e) {
+    $('msg').className = 'err'; $('msg').textContent = e.message || 'Errore';
+  } finally { $('go').disabled = false; }
+}
+let current = null;
+function setPlayer(p) {
+  if (!current) return;
+  try { localStorage.setItem('player', p); } catch {}
+  const frame = document.querySelector('.frame');
+  const bq = $('bq');
+  bq.innerHTML = ''; frame.style.display = p === 'bq' ? 'none' : '';
+  frame.classList.toggle('v2', p === 'v2');
+  if (p === 'bq') {
+    $('ifr').src = 'about:blank';
+    const cite = current.finalUrl ? current.finalUrl.split('?')[0] : `https://www.tiktok.com/@/video/${current.id}`;
+    bq.innerHTML = `<blockquote class="tiktok-embed" cite="${esc(cite)}" data-video-id="${esc(current.id)}" style="max-width:605px;min-width:325px;"><section></section></blockquote>`;
+    const sc = document.createElement('script'); sc.async = true; sc.src = 'https://www.tiktok.com/embed.js'; bq.appendChild(sc);
+  } else {
+    $('ifr').src = p === 'v2'
+      ? `https://www.tiktok.com/embed/v2/${current.id}?lang=it-IT`
+      : `https://www.tiktok.com/player/v1/${current.id}?autoplay=1&loop=1&music_info=1&description=1&rel=0`;
+  }
+  document.querySelectorAll('.switch [data-p]').forEach(b => b.classList.toggle('on', b.dataset.p === p));
+}
+document.querySelectorAll('.switch [data-p]').forEach(b => b.onclick = () => setPlayer(b.dataset.p));
+$('ext').onclick = () => current && window.open(current.finalUrl || `https://www.tiktok.com/@/video/${current.id}`, '_blank');
+$('f').onsubmit = e => { e.preventDefault(); open($('url').value); };
+const q = new URLSearchParams(location.search).get('url');
+if (q) { $('url').value = q; open(q); }
+</script>
+</body>
+</html>
